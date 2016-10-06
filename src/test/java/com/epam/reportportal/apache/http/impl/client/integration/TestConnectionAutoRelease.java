@@ -1,0 +1,255 @@
+/*
+ * ====================================================================
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
+ */
+
+package com.epam.reportportal.apache.http.impl.client.integration;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import com.epam.reportportal.apache.http.HttpClientConnection;
+import com.epam.reportportal.apache.http.HttpEntity;
+import com.epam.reportportal.apache.http.HttpException;
+import com.epam.reportportal.apache.http.HttpHost;
+import com.epam.reportportal.apache.http.HttpRequest;
+import com.epam.reportportal.apache.http.HttpResponse;
+import com.epam.reportportal.apache.http.MalformedChunkCodingException;
+import com.epam.reportportal.apache.http.client.methods.HttpGet;
+import com.epam.reportportal.apache.http.conn.ConnectionPoolTimeoutException;
+import com.epam.reportportal.apache.http.conn.ConnectionRequest;
+import com.epam.reportportal.apache.http.conn.routing.HttpRoute;
+import com.epam.reportportal.apache.http.entity.BasicHttpEntity;
+import com.epam.reportportal.apache.http.impl.DefaultBHttpServerConnection;
+import com.epam.reportportal.apache.http.impl.client.HttpClients;
+import com.epam.reportportal.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import com.epam.reportportal.apache.http.pool.PoolStats;
+import com.epam.reportportal.apache.http.protocol.HttpContext;
+import com.epam.reportportal.apache.http.protocol.HttpCoreContext;
+import com.epam.reportportal.apache.http.protocol.HttpRequestHandler;
+import com.epam.reportportal.apache.http.util.EntityUtils;
+
+public class TestConnectionAutoRelease extends IntegrationTestBase {
+
+    private PoolingHttpClientConnectionManager mgr;
+
+    @Before
+    public void setUp() throws Exception {
+        startServer();
+        this.mgr = new PoolingHttpClientConnectionManager();
+        this.httpclient = HttpClients.custom().setConnectionManager(this.mgr).build();
+    }
+
+    @Test
+    public void testReleaseOnEntityConsumeContent() throws Exception {
+        this.mgr.setDefaultMaxPerRoute(1);
+        this.mgr.setMaxTotal(1);
+
+        // Zero connections in the pool
+        PoolStats stats = this.mgr.getTotalStats();
+        Assert.assertEquals(0, stats.getAvailable());
+
+        // Get some random data
+        final HttpGet httpget = new HttpGet("/random/20000");
+        final HttpHost target = getServerHttp();
+
+        final HttpResponse response = this.httpclient.execute(target, httpget);
+
+        ConnectionRequest connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        try {
+            connreq.get(250, TimeUnit.MILLISECONDS);
+            Assert.fail("ConnectionPoolTimeoutException should have been thrown");
+        } catch (final ConnectionPoolTimeoutException expected) {
+        }
+
+        final HttpEntity e = response.getEntity();
+        Assert.assertNotNull(e);
+        EntityUtils.consume(e);
+
+        // Expect one connection in the pool
+        stats = this.mgr.getTotalStats();
+        Assert.assertEquals(1, stats.getAvailable());
+
+        // Make sure one connection is available
+        connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        final HttpClientConnection conn = connreq.get(250, TimeUnit.MILLISECONDS);
+
+        this.mgr.releaseConnection(conn, null, -1, null);
+    }
+
+    @Test
+    public void testReleaseOnEntityWriteTo() throws Exception {
+        this.mgr.setDefaultMaxPerRoute(1);
+        this.mgr.setMaxTotal(1);
+
+        // Zero connections in the pool
+        PoolStats stats = this.mgr.getTotalStats();
+        Assert.assertEquals(0, stats.getAvailable());
+
+        // Get some random data
+        final HttpGet httpget = new HttpGet("/random/20000");
+        final HttpHost target = getServerHttp();
+
+        final HttpResponse response = this.httpclient.execute(target, httpget);
+
+        ConnectionRequest connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        try {
+            connreq.get(250, TimeUnit.MILLISECONDS);
+            Assert.fail("ConnectionPoolTimeoutException should have been thrown");
+        } catch (final ConnectionPoolTimeoutException expected) {
+        }
+
+        final HttpEntity e = response.getEntity();
+        Assert.assertNotNull(e);
+        final ByteArrayOutputStream outsteam = new ByteArrayOutputStream();
+        e.writeTo(outsteam);
+
+        // Expect one connection in the pool
+        stats = this.mgr.getTotalStats();
+        Assert.assertEquals(1, stats.getAvailable());
+
+        // Make sure one connection is available
+        connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        final HttpClientConnection conn = connreq.get(250, TimeUnit.MILLISECONDS);
+
+        this.mgr.releaseConnection(conn, null, -1, null);
+    }
+
+    @Test
+    public void testReleaseOnAbort() throws Exception {
+        this.mgr.setDefaultMaxPerRoute(1);
+        this.mgr.setMaxTotal(1);
+
+        // Zero connections in the pool
+        final PoolStats stats = this.mgr.getTotalStats();
+        Assert.assertEquals(0, stats.getAvailable());
+
+        // Get some random data
+        final HttpGet httpget = new HttpGet("/random/20000");
+        final HttpHost target = getServerHttp();
+
+        final HttpResponse response = this.httpclient.execute(target, httpget);
+
+        ConnectionRequest connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        try {
+            connreq.get(250, TimeUnit.MILLISECONDS);
+            Assert.fail("ConnectionPoolTimeoutException should have been thrown");
+        } catch (final ConnectionPoolTimeoutException expected) {
+        }
+
+        final HttpEntity e = response.getEntity();
+        Assert.assertNotNull(e);
+        httpget.abort();
+
+        // Expect zero connections in the pool
+        Assert.assertEquals(0, this.mgr.getTotalStats().getAvailable());
+
+        // Make sure one connection is available
+        connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        final HttpClientConnection conn = connreq.get(250, TimeUnit.MILLISECONDS);
+
+        this.mgr.releaseConnection(conn, null, -1, null);
+    }
+
+    @Test
+    public void testReleaseOnIOException() throws Exception {
+        this.localServer.register("/dropdead", new HttpRequestHandler() {
+
+            public void handle(
+                    final HttpRequest request,
+                    final HttpResponse response,
+                    final HttpContext context) throws HttpException, IOException {
+                final BasicHttpEntity entity = new BasicHttpEntity() {
+
+                    @Override
+                    public void writeTo(
+                            final OutputStream outstream) throws IOException {
+                        final byte[] tmp = new byte[5];
+                        outstream.write(tmp);
+                        outstream.flush();
+
+                        // do something comletely ugly in order to trigger
+                        // MalformedChunkCodingException
+                        final DefaultBHttpServerConnection conn = (DefaultBHttpServerConnection)
+                            context.getAttribute(HttpCoreContext.HTTP_CONNECTION);
+                        try {
+                            conn.sendResponseHeader(response);
+                        } catch (final HttpException ignore) {
+                        }
+                    }
+
+                } ;
+                entity.setChunked(true);
+                response.setEntity(entity);
+            }
+
+        });
+
+        this.mgr.setDefaultMaxPerRoute(1);
+        this.mgr.setMaxTotal(1);
+
+        // Zero connections in the pool
+        Assert.assertEquals(0, this.mgr.getTotalStats().getAvailable());
+
+        // Get some random data
+        final HttpGet httpget = new HttpGet("/dropdead");
+        final HttpHost target = getServerHttp();
+
+        final HttpResponse response = this.httpclient.execute(target, httpget);
+
+        ConnectionRequest connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        try {
+            connreq.get(250, TimeUnit.MILLISECONDS);
+            Assert.fail("ConnectionPoolTimeoutException should have been thrown");
+        } catch (final ConnectionPoolTimeoutException expected) {
+        }
+
+        final HttpEntity e = response.getEntity();
+        Assert.assertNotNull(e);
+        // Read the content
+        try {
+            EntityUtils.toByteArray(e);
+            Assert.fail("MalformedChunkCodingException should have been thrown");
+        } catch (final MalformedChunkCodingException expected) {
+
+        }
+
+        // Expect zero connections in the pool
+        Assert.assertEquals(0, this.mgr.getTotalStats().getAvailable());
+
+        // Make sure one connection is available
+        connreq = this.mgr.requestConnection(new HttpRoute(target), null);
+        final HttpClientConnection conn = connreq.get(250, TimeUnit.MILLISECONDS);
+
+        this.mgr.releaseConnection(conn, null, -1, null);
+    }
+
+}

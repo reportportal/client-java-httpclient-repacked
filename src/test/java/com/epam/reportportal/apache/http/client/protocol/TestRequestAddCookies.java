@@ -1,0 +1,507 @@
+/*
+ * ====================================================================
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
+ */
+package com.epam.reportportal.apache.http.client.protocol;
+
+import java.util.Date;
+
+import com.epam.reportportal.apache.http.client.protocol.HttpClientContext;
+import com.epam.reportportal.apache.http.client.protocol.RequestAddCookies;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import com.epam.reportportal.apache.http.Header;
+import com.epam.reportportal.apache.http.HttpHost;
+import com.epam.reportportal.apache.http.HttpRequest;
+import com.epam.reportportal.apache.http.HttpRequestInterceptor;
+import com.epam.reportportal.apache.http.client.CookieStore;
+import com.epam.reportportal.apache.http.client.config.CookieSpecs;
+import com.epam.reportportal.apache.http.client.config.RequestConfig;
+import com.epam.reportportal.apache.http.config.Lookup;
+import com.epam.reportportal.apache.http.config.RegistryBuilder;
+import com.epam.reportportal.apache.http.conn.routing.HttpRoute;
+import com.epam.reportportal.apache.http.conn.routing.RouteInfo.LayerType;
+import com.epam.reportportal.apache.http.conn.routing.RouteInfo.TunnelType;
+import com.epam.reportportal.apache.http.cookie.CookieOrigin;
+import com.epam.reportportal.apache.http.cookie.CookieSpec;
+import com.epam.reportportal.apache.http.cookie.CookieSpecProvider;
+import com.epam.reportportal.apache.http.cookie.SM;
+import com.epam.reportportal.apache.http.impl.client.BasicCookieStore;
+import com.epam.reportportal.apache.http.impl.cookie.BasicClientCookie;
+import com.epam.reportportal.apache.http.impl.cookie.BasicClientCookie2;
+import com.epam.reportportal.apache.http.impl.cookie.BestMatchSpecFactory;
+import com.epam.reportportal.apache.http.impl.cookie.BrowserCompatSpec;
+import com.epam.reportportal.apache.http.impl.cookie.BrowserCompatSpecFactory;
+import com.epam.reportportal.apache.http.impl.cookie.IgnoreSpecFactory;
+import com.epam.reportportal.apache.http.impl.cookie.NetscapeDraftSpecFactory;
+import com.epam.reportportal.apache.http.impl.cookie.RFC2965SpecFactory;
+import com.epam.reportportal.apache.http.message.BasicHttpRequest;
+
+public class TestRequestAddCookies {
+
+    private HttpHost target;
+    private CookieStore cookieStore;
+    private Lookup<CookieSpecProvider> cookieSpecRegistry;
+
+    @Before
+    public void setUp() {
+        this.target = new HttpHost("localhost.local", 80);
+        this.cookieStore = new BasicCookieStore();
+        final BasicClientCookie2 cookie1 = new BasicClientCookie2("name1", "value1");
+        cookie1.setVersion(1);
+        cookie1.setDomain("localhost.local");
+        cookie1.setPath("/");
+        this.cookieStore.addCookie(cookie1);
+        final BasicClientCookie2 cookie2 = new BasicClientCookie2("name2", "value2");
+        cookie2.setVersion(1);
+        cookie2.setDomain("localhost.local");
+        cookie2.setPath("/");
+        this.cookieStore.addCookie(cookie2);
+
+        this.cookieSpecRegistry = RegistryBuilder.<CookieSpecProvider>create()
+            .register(CookieSpecs.BEST_MATCH, new BestMatchSpecFactory())
+            .register(CookieSpecs.STANDARD, new RFC2965SpecFactory())
+            .register(CookieSpecs.BROWSER_COMPATIBILITY, new BrowserCompatSpecFactory())
+            .register(CookieSpecs.NETSCAPE, new NetscapeDraftSpecFactory())
+            .register(CookieSpecs.IGNORE_COOKIES, new IgnoreSpecFactory())
+            .build();
+    }
+
+    @Test(expected=IllegalArgumentException.class)
+    public void testRequestParameterCheck() throws Exception {
+        final HttpClientContext context = HttpClientContext.create();
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(null, context);
+    }
+
+    @Test(expected=IllegalArgumentException.class)
+    public void testContextParameterCheck() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, null);
+    }
+
+    @Test
+    public void testAddCookies() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(2, headers1.length);
+        Assert.assertEquals("$Version=1; name1=\"value1\"", headers1[0].getValue());
+        Assert.assertEquals("$Version=1; name2=\"value2\"", headers1[1].getValue());
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+
+        final CookieOrigin cookieOrigin = context.getCookieOrigin();
+        Assert.assertNotNull(cookieOrigin);
+        Assert.assertEquals(this.target.getHostName(), cookieOrigin.getHost());
+        Assert.assertEquals(this.target.getPort(), cookieOrigin.getPort());
+        Assert.assertEquals("/", cookieOrigin.getPath());
+        Assert.assertFalse(cookieOrigin.isSecure());
+    }
+
+    @Test
+    public void testCookiesForConnectRequest() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("CONNECT", "www.somedomain.com");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testNoCookieStore() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, null);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testNoCookieSpecRegistry() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, null);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testNoTargetHost() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, null);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testNoHttpConnection() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_CONNECTION, null);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testAddCookiesUsingExplicitCookieSpec() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+        final RequestConfig config = RequestConfig.custom()
+            .setCookieSpec(CookieSpecs.BROWSER_COMPATIBILITY).build();
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.REQUEST_CONFIG, config);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final CookieSpec cookieSpec = context.getCookieSpec();
+        Assert.assertTrue(cookieSpec instanceof BrowserCompatSpec);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(1, headers1.length);
+        Assert.assertEquals("name1=value1; name2=value2", headers1[0].getValue());
+    }
+
+    @Test
+    public void testAuthScopeInvalidRequestURI() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "crap:");
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+    }
+
+    @Test
+    public void testAuthScopeRemotePortWhenDirect() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/stuff");
+
+        this.target = new HttpHost("localhost.local");
+        final HttpRoute route = new HttpRoute(new HttpHost("localhost.local", 1234), null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final CookieOrigin cookieOrigin = context.getCookieOrigin();
+        Assert.assertNotNull(cookieOrigin);
+        Assert.assertEquals(this.target.getHostName(), cookieOrigin.getHost());
+        Assert.assertEquals(1234, cookieOrigin.getPort());
+        Assert.assertEquals("/stuff", cookieOrigin.getPath());
+        Assert.assertFalse(cookieOrigin.isSecure());
+    }
+
+    @Test
+    public void testAuthDefaultHttpPortWhenProxy() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/stuff");
+
+        this.target = new HttpHost("localhost.local");
+        final HttpRoute route = new HttpRoute(
+                new HttpHost("localhost.local", 80), null, new HttpHost("localhost", 8888), false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final CookieOrigin cookieOrigin = context.getCookieOrigin();
+        Assert.assertNotNull(cookieOrigin);
+        Assert.assertEquals(this.target.getHostName(), cookieOrigin.getHost());
+        Assert.assertEquals(80, cookieOrigin.getPort());
+        Assert.assertEquals("/stuff", cookieOrigin.getPath());
+        Assert.assertFalse(cookieOrigin.isSecure());
+    }
+
+    @Test
+    public void testAuthDefaultHttpsPortWhenProxy() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/stuff");
+
+        this.target = new HttpHost("localhost", -1, "https");
+        final HttpRoute route = new HttpRoute(
+                new HttpHost("localhost", 443, "https"), null,
+                new HttpHost("localhost", 8888), true, TunnelType.TUNNELLED, LayerType.LAYERED);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final CookieOrigin cookieOrigin = context.getCookieOrigin();
+        Assert.assertNotNull(cookieOrigin);
+        Assert.assertEquals(this.target.getHostName(), cookieOrigin.getHost());
+        Assert.assertEquals(443, cookieOrigin.getPort());
+        Assert.assertEquals("/stuff", cookieOrigin.getPath());
+        Assert.assertTrue(cookieOrigin.isSecure());
+    }
+
+    @Test
+    public void testExcludeExpiredCookies() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        final BasicClientCookie2 cookie3 = new BasicClientCookie2("name3", "value3");
+        cookie3.setVersion(1);
+        cookie3.setDomain("localhost.local");
+        cookie3.setPath("/");
+        cookie3.setExpiryDate(new Date(System.currentTimeMillis() - (24 * 60 * 60 * 1000)));
+
+        this.cookieStore.addCookie(cookie3);
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(2, headers1.length);
+        Assert.assertEquals("$Version=1; name1=\"value1\"", headers1[0].getValue());
+        Assert.assertEquals("$Version=1; name2=\"value2\"", headers1[1].getValue());
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    @Test
+    public void testNoMatchingCookies() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        this.cookieStore.clear();
+        final BasicClientCookie cookie3 = new BasicClientCookie("name3", "value3");
+        cookie3.setDomain("www.somedomain.com");
+        cookie3.setPath("/");
+        this.cookieStore.addCookie(cookie3);
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(0, headers1.length);
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(0, headers2.length);
+    }
+
+    // Helper method
+    private BasicClientCookie makeCookie(final String name, final String value, final String domain, final String path) {
+        final BasicClientCookie cookie = new BasicClientCookie(name, value);
+        cookie.setDomain(domain);
+        cookie.setPath(path);
+        return cookie;
+    }
+
+    @Test
+    // Test for ordering adapted from test in Commons HC 3.1
+    public void testCookieOrder() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/foobar/yada/yada");
+
+        this.cookieStore.clear();
+
+        cookieStore.addCookie(makeCookie("nomatch", "value", "localhost.local", "/noway"));
+        cookieStore.addCookie(makeCookie("name2",   "value", "localhost.local", "/foobar/yada"));
+        cookieStore.addCookie(makeCookie("name3",   "value", "localhost.local", "/foobar"));
+        cookieStore.addCookie(makeCookie("name1",   "value", "localhost.local", "/foobar/yada/yada"));
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(1, headers1.length);
+
+        Assert.assertEquals("name1=value; name2=value; name3=value", headers1[0].getValue());
+    }
+
+    @Test
+    public void testAddSpecVersionHeader() throws Exception {
+        final HttpRequest request = new BasicHttpRequest("GET", "/");
+
+        this.cookieStore.clear();
+        final BasicClientCookie cookie1 = new BasicClientCookie("name1", "value1");
+        cookie1.setVersion(0);
+        cookie1.setDomain("localhost.local");
+        cookie1.setPath("/");
+        this.cookieStore.addCookie(cookie1);
+        final BasicClientCookie cookie2 = new BasicClientCookie("name2", "value2");
+        cookie2.setVersion(0);
+        cookie2.setDomain("localhost.local");
+        cookie2.setPath("/");
+        this.cookieStore.addCookie(cookie2);
+
+        final HttpRoute route = new HttpRoute(this.target, null, false);
+
+        final HttpClientContext context = HttpClientContext.create();
+        context.setAttribute(HttpClientContext.HTTP_TARGET_HOST, this.target);
+        context.setAttribute(HttpClientContext.HTTP_ROUTE, route);
+        context.setAttribute(HttpClientContext.COOKIE_STORE, this.cookieStore);
+        context.setAttribute(HttpClientContext.COOKIESPEC_REGISTRY, this.cookieSpecRegistry);
+
+        final HttpRequestInterceptor interceptor = new RequestAddCookies();
+        interceptor.process(request, context);
+
+        final Header[] headers1 = request.getHeaders(SM.COOKIE);
+        Assert.assertNotNull(headers1);
+        Assert.assertEquals(1, headers1.length);
+        Assert.assertEquals("name1=value1; name2=value2", headers1[0].getValue());
+        final Header[] headers2 = request.getHeaders(SM.COOKIE2);
+        Assert.assertNotNull(headers2);
+        Assert.assertEquals(1, headers2.length);
+        Assert.assertEquals("$Version=1", headers2[0].getValue());
+    }
+
+}
