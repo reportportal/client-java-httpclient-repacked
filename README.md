@@ -1,2 +1,2 @@
 # httpclient-repacked
-[![Download](https://api.bintray.com/packages/epam/reportportal/httpclient-repacked/images/download.svg) ](https://bintray.com/epam/reportportal/httpclient-repacked/_latestVersion)
+[![Maven Central](https://img.shields.io/maven-central/v/com.epam.reportportal/httpclient-repacked.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22com.epam.reportportal%22%20AND%20a:%22httpclient-repacked%22)
